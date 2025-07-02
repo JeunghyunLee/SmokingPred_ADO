@@ -1,0 +1,568 @@
+---
+title: "Bayesian parameter estimation for Cocomo task data"
+author: "Jaeyeong Yang"
+date: "`r Sys.Date()`"
+output:
+  beamer_presentation: 
+    slide_level: 2
+    theme: Frankfurt
+    fonttheme: structuresmallcapsserif
+    colortheme: seagull
+editor_options: 
+  chunk_output_type: console
+header-includes:
+- \usepackage{booktabs}
+- \usepackage{makecell}
+---
+
+```{r setup, include=FALSE}
+rm(list = ls())
+
+library(tidyverse)
+library(lubridate)
+library(furrr)
+library(future)
+library(progressr)
+library(rstan)
+library(jsonlite)
+library(cowplot)
+library(latex2exp)
+library(gtsummary)
+library(kableExtra)
+
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
+                      fig.align = 'center', dpi = 300, out.width = '100%')
+```
+
+```{r globals}
+PATH_DATA <- './repo_main/appdata/data'
+PATH_CACHE <- './cache'
+PATH_OUT <- './data'
+
+TASKS <- c('cra', 'ddt')
+
+DESIGNS <- list(
+  cra = c('r_fix', 'r_var', 'p_var', 'a_var'),
+  ddt = c('r_ss', 'r_ll', 't_ss', 't_ll')
+)
+PARAMS <- list(
+  cra = c('alpha', 'beta', 'loggamma'),
+  ddt = c('logk', 'logtau')
+)
+```
+
+```{r data}
+dfs <- list()
+for (task in TASKS) {
+  dfs[[task]] <-
+    Sys.glob(file.path(PATH_DATA, str_glue('sub-*_task-{task}_*.tsv'))) %>%
+    lapply(function(fn) {
+      read_tsv(fn, show_col_types = FALSE)
+    }) %>%
+    do.call(what = bind_rows)
+}
+```
+
+# Setup
+
+## Data
+
+```{r}
+subj_cra <- dfs$cra %>% distinct(
+  subject) %>% pull(subject)
+subj_ddt <- dfs$ddt %>% distinct(subject) %>% pull(subject)
+subjects <- c(subj_cra, subj_ddt) %>% unique()
+```
+
+* **Participants**: $N = `r length(subjects)`$
+  * CRA -- $N = `r length(subj_cra)`$
+  * DDT -- $N = `r length(subj_ddt)`$
+  * Participants only with DDT data: `r setdiff(subj_ddt, subj_cra)`
+  
+* **Task sessions**
+  * CRA -- `r dfs$cra %>% distinct(subject, day) %>% nrow()` sessions
+    * 60 trials per session in 2019, 30 trials per session in 2021
+  * DDT -- `r dfs$ddt %>% distinct(subject, day) %>% nrow()` sessions
+    * 20 trials per session
+
+## Model specification
+
+* Single-level (session) models
+
+* CRA -- linear model (with log-transformed inverse temperature)
+  * $\alpha$: risk attitude parameter
+    * $\alpha \sim \text{Uniform}[0, 5]$
+  * $\beta$: ambiguity attitude parameter
+    * $\beta \sim \text{Uniform}[-3, 3]$
+  * $\log\gamma$: log-transformed inverse temperature
+    * $\log\gamma \sim \text{Uniform}[-4, 4]$
+    
+* DD -- hyperbolic model (with log-transformed inverse temperature)
+  * $\log k$: log-transformed discounting rate
+      * $\log k \sim \text{Uniform}[-10, 2]$
+  * $\log\tau$: log-transformed inverse temperature
+    * $\log\tau \sim \text{Uniform}[-4, 4]$
+
+## Estimation methods
+
+* Parameter estimation
+  * Using rstan: 4 chains, 4000 iters, 2000 warmups
+  * Repeat fitting up to 100 times until all $\hat{R} < 1.01$
+
+* Data exclusion
+  * Exclude $Z_\text{95\% HDI} \geq 1.96$ for $\alpha$ and $\beta$ (CRA) or $\log k$ (DDT)
+
+```{r fitting}
+run_models <- function(task, df, model_file, designs, params,
+                       n_iter = 100, rhat_crit = 1.01) {
+  mod <- stan_model(model_file)
+  
+  datalists <-
+    df %>%
+    rename(choice = response) %>%
+    select(subject, day, trial, all_of(designs), choice) %>%
+    group_by(subject, day) %>%
+    group_map(function(x, ...) {
+      ret <- as.list(x)
+      ret$T <- nrow(x)
+      ret$subject <- ...$subject
+      ret$day <- ...$day
+      ret
+    })
+  n_sessions <- length(datalists)
+  
+  with_progress({
+    p <- progressor(steps = n_sessions)
+    
+    df_est <-
+      datalists %>%
+      future_map_dfr(function(datalist) {
+        rhat_best <- 999
+        smr_best <- NULL
+        for (i in 1:n_iter) {
+          stanfit <-
+            sampling(mod, data = datalist, chains = 4, cores = 4, refresh = 0,
+                     iter = 4000, warmup = 2000, show_messages = FALSE)
+          
+          smr <-
+            summary(stanfit)$summary %>%
+            as.data.frame() %>%
+            rownames_to_column('variable') %>%
+            filter(variable %in% params)
+          
+          rhat_max <- max(smr$Rhat)
+          if (rhat_max < rhat_best) {
+            rhat_best <- rhat_max
+            smr_best <- smr
+            
+            if (rhat_best < rhat_crit)
+              break
+          }
+        }
+        
+        p()  # Increment the progressbar
+        
+        smr_best %>%
+          gather(colname, value, -variable) %>%
+          unite(variable, variable, colname) %>%
+          spread(variable, value) %>%
+          mutate(subject = datalist$subject,
+                 day = datalist$day) %>%
+          select(subject, day, everything())
+      })
+  })
+  
+  df %>%
+    select(subject, day, trial, starts_with('mean_'), starts_with('sd_')) %>%
+    arrange(subject, day, trial) %>%
+    group_by(subject, day) %>%
+    mutate(tttt = row_number(),
+           max_tttt = max(tttt)) %>%
+    ungroup() %>%
+    filter(tttt == max_tttt) %>%
+    select(-tttt, -max_tttt, -trial) %>%
+    rename_at(
+      vars(starts_with('mean_')),
+      function(c) str_c('ado_', c)) %>%
+    rename_at(
+      vars(starts_with('sd_')),
+      function(c) str_c('ado_', c)) %>%
+    inner_join(df_est)
+}
+
+dfs_est <- list()
+for (task in TASKS) {
+  fn_est <- str_glue('./data/{task}_est_full.tsv')
+  
+  # Double check here 
+  if (!file.exists(fn_est)) {
+    plan(multisession, workers = 4)
+    
+    dfs_est[[task]] <-
+      run_models(
+        task = task,
+        df = dfs[[task]],
+        model_file = str_glue('./stan/{task}_ind_log-inv-temp_v1.stan'),
+        designs = DESIGNS[[task]],
+        params = PARAMS[[task]]
+      )
+     
+    dfs_est[[task]] %>% write_tsv(fn_est)
+  } else {
+    dfs_est[[task]] <- read_tsv(fn_est, show_col_types = FALSE)
+  }
+  system(sprintf("slackbot -d '@jeunghyunlee' -m 'Appdata fitting complete for fulldata: %s Task'", task))
+}
+
+
+```
+
+```{r compare_ado_mcmc}
+draw_comp_fig <- function(df, params, title = NULL, subtitle = NULL) {
+  plots <- list()
+  
+  for (param in params) {
+    fit_corr <- cor.test(
+      df %>% pull(!!as.name(str_glue('ado_mean_{param}'))),
+      df %>% pull(!!as.name(str_glue('{param}_mean'))),
+    )
+    
+    plots[[param]] <-
+      df %>%
+      ggplot(aes_string(x = str_glue('ado_mean_{param}'),
+                        y = str_glue('{param}_mean'))) +
+      geom_errorbar(aes_string(ymin = str_glue('`{param}_2.5%`'),
+                               ymax = str_glue('`{param}_97.5%`')),
+                    alpha = 0.02) +
+      geom_point(alpha = 0.1) +
+      geom_smooth(method = 'lm', se = FALSE, alpha = 0.1, color = 'red') +
+      labs(
+        title = title,
+        subtitle = subtitle,
+        x = str_glue('{param} - ADO'),
+        y = str_glue('{param} - MCMC'),
+        caption = sprintf(
+          '* Pearson\'s correlation: r=%.3f, df=%d, %s',
+          fit_corr$estimate[['cor']],
+          fit_corr$parameter[['df']],
+          ifelse(fit_corr$p.value < 0.001, 'p<.001',
+                 str_c('p=', sprintf('%.3f', fit_corr$p.value) %>% str_replace('0.', '.')))
+        )
+      ) +
+      theme_bw() +
+      theme()
+  }
+  
+  plot_grid(plotlist = plots, nrow = 1, align = 'hv')
+}
+```
+
+```{r result}
+dfs_res <- list()
+
+dfs_res$cra <-
+  dfs_est$cra %>%
+  mutate(ado_mean_loggamma = log(ado_mean_gamma)) %>%
+  select(-ado_mean_gamma)
+
+dfs_res$ddt <-
+  dfs_est$ddt %>%
+  mutate(ado_mean_logk = log(ado_mean_k),
+         ado_mean_logtau = log(ado_mean_tau)) %>%
+  select(-ado_mean_k, -ado_mean_tau)
+
+dfs_exc <- list()
+
+dfs_exc$cra <-
+  dfs_res$cra %>%
+  mutate(alpha_hdi_range = `alpha_97.5%` - `alpha_2.5%`,
+         beta_hdi_range = `beta_97.5%` - `beta_2.5%`,
+         alpha_hdi_range_z = scale(alpha_hdi_range),
+         beta_hdi_range_z = scale(beta_hdi_range)) %>%
+  filter((alpha_hdi_range_z < 1.96) & (beta_hdi_range_z < 1.96))
+
+dfs_exc$ddt <-
+  dfs_res$ddt %>%
+  mutate(logk_hdi_range = `logk_97.5%` - `logk_2.5%`,
+         logk_hdi_range_z = scale(logk_hdi_range)) %>%
+  filter(logk_hdi_range_z < 1.96)
+
+full_join(
+  dfs_exc$cra %>%
+    select(subject, day, ends_with('_mean'), -ends_with('_se_mean')),
+  dfs_exc$ddt %>%
+    select(subject, day, ends_with('_mean'), -ends_with('_se_mean')),
+  by = c('subject', 'day')
+) %>%
+  write_tsv('./data/param_est_exc_full.tsv')
+```
+
+```{r}
+df_final <-
+  dfs_res %>%
+  lapply(function(df) {
+    df %>%
+    gather(colname, value, -subject, -day) %>%
+    mutate(
+      colname = ifelse(
+        str_starts(colname, 'ado_'),
+        colname %>%
+          str_remove('ado_') %>%
+          str_split('_') %>%
+          map_chr(function(l) {
+            str_c(l[[2]], '_', l[[1]], '_ado')
+          }),
+        colname
+      ),
+      param = colname %>% str_remove('_.*'),
+      colname = colname %>% str_remove('^\\w*?_'),
+      colname =
+        ifelse(colname == '2.5%', 'hdi95_lo',
+          ifelse(colname == '97.5%', 'hdi95_hi', colname))
+    ) %>%
+    filter(colname %in% c('mean', 'sd', 'hdi95_lo', 'hdi95_hi', 'mean_ado')) %>%
+    unite(colname, param, colname) %>%
+    spread(colname, value)
+  }) %>%
+  unname() %>%
+  do.call(what = full_join) %>%
+  gather(colname, value, -subject, -day) %>%
+  mutate(
+    colname = ifelse(
+      str_starts(colname, 'ado_'),
+      colname %>%
+        str_remove('ado_') %>%
+        str_split('_') %>%
+        map_chr(function(l) {
+          str_c(l[[2]], '_', l[[1]], '_ado')
+        }),
+      colname
+    ),
+    param = colname %>% str_remove('_.*'),
+    colname = colname %>% str_remove('^\\w*?_')
+  ) %>%
+  spread(colname, value) %>%
+  mutate(hdi95_range = hdi95_hi - hdi95_lo) %>%
+  group_by(param) %>%
+  mutate(hdi95_range_z = (hdi95_range - mean(hdi95_range, na.rm = TRUE)) / sd(hdi95_range, na.rm = TRUE)) %>%
+  ungroup() %>%
+  gather(colname, value, -subject, -day, -param) %>%
+  unite(colname, param, colname) %>%
+  spread(colname, value)
+
+df_final %>% write_tsv('./data/app-task_full.tsv')
+```
+
+# Parameter distribution
+
+## Summary (CRA)
+
+```{r}
+bind_rows(
+  dfs_res$cra %>% mutate(type = 1),
+  dfs_exc$cra %>% mutate(type = 2)
+) %>%
+  mutate(type = factor(type, levels = 1:2, labels = c('Before exclusion', 'After exclusion'))) %>%
+  select(all_of(str_c(PARAMS$cra, '_mean')), type) %>%
+  rename_at(vars(ends_with('_mean')), function(c) str_remove(c, '_mean')) %>%
+  tbl_summary(
+    by = 'type',
+    statistic = list(
+      all_continuous() ~ '{mean} ({sd})'
+    ),
+    label = list(
+      alpha ~ '$\\alpha$',
+      beta ~ '$\\beta$',
+      loggamma ~ '$\\log\\gamma$'
+    ),
+    missing = 'no'
+  ) %>%
+  add_p(
+    test = list(
+      all_continuous() ~ 't.test'
+    )) %>%
+  modify_header(
+    update = list(
+      label ~ '**Parameter**',
+      all_stat_cols() ~ '\\makecell[c]{{**{level}**\\\\(N = {n})}}',
+      p.value ~ '$p$'
+    )
+  ) %>%
+  modify_caption("Choice under risk and ambiguity (CRA)") %>%
+  bold_labels() %>%
+  as_kable_extra(format = 'latex', booktabs = TRUE, escape = FALSE, align = 'lccl') %>%
+  kable_styling()
+```
+
+## Summary (DDT)
+
+```{r}
+bind_rows(
+  dfs_res$ddt %>% mutate(type = 1),
+  dfs_exc$ddt %>% mutate(type = 2)
+) %>%
+  mutate(type = factor(type, levels = 1:2, labels = c('Before exclusion', 'After exclusion'))) %>%
+  select(all_of(str_c(PARAMS$ddt, '_mean')), type) %>%
+  rename_at(vars(ends_with('_mean')), function(c) str_remove(c, '_mean')) %>%
+  tbl_summary(
+    by = 'type',
+    statistic = list(
+      all_continuous() ~ '{mean} ({sd})'
+    ),
+    label = list(
+      logk ~ '$\\log k$',
+      logtau ~ '$\\log\\tau$'
+    ),
+    missing = 'no'
+  ) %>%
+  add_p(
+    test = list(
+      all_continuous() ~ 't.test'
+    )) %>%
+  modify_header(
+    update = list(
+      label ~ '**Parameter**',
+      all_stat_cols() ~ '\\makecell[c]{{**{level}**\\\\(N = {n})}}',
+      p.value ~ '$p$'
+    )
+  ) %>%
+  modify_caption("Delay discounting task (DDT)") %>%
+  bold_labels() %>%
+  as_kable_extra(format = 'latex', booktabs = TRUE, escape = FALSE, align = 'lccl') %>%
+  kable_styling()
+```
+
+## Density plots (before exclusion)
+
+```{r fig_dist_res, fig.width = 8, fig.height = 5}
+plots_dist <- list()
+for (task in TASKS) {
+  plots_dist[[task]] <-
+    dfs_res[[task]] %>%
+    select(all_of(str_c(PARAMS[[task]], '_mean'))) %>%
+    gather(param, value) %>%
+    mutate(param = str_remove(param, '_mean')) %>%
+    ggplot(aes(x = value)) +
+    geom_density(fill = 'black', alpha = 0.5) +
+    geom_boxplot(width = 0.1, outlier.size = 0.5) +
+    geom_vline(aes(xintercept = mean(value)), color = 'red') +
+    facet_wrap(~ param, scales = 'free_x') +
+    theme_bw() +
+    theme(strip.text = element_text(size = 11),
+          axis.title = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank())
+}
+
+plot_grid(
+  plots_dist$cra,
+  plot_grid(NULL, plots_dist$ddt, nrow = 1, rel_widths = c(1, 2)),
+  ncol = 1
+)
+```
+
+## Density plots (after exclusion)
+
+```{r fig_dist_exc, fig.width = 8, fig.height = 5}
+plots_dist <- list()
+for (task in TASKS) {
+  plots_dist[[task]] <-
+    dfs_exc[[task]] %>%
+    select(all_of(str_c(PARAMS[[task]], '_mean'))) %>%
+    gather(param, value) %>%
+    mutate(param = str_remove(param, '_mean')) %>%
+    ggplot(aes(x = value)) +
+    geom_density(fill = 'black', alpha = 0.5) +
+    geom_boxplot(width = 0.1, outlier.size = 0.5) +
+    geom_vline(aes(xintercept = mean(value)), color = 'red') +
+    facet_wrap(~ param, scales = 'free_x') +
+    theme_bw() +
+    theme(strip.text = element_text(size = 11),
+          axis.title = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank())
+}
+
+plot_grid(
+  plots_dist$cra,
+  plot_grid(NULL, plots_dist$ddt, nrow = 1, rel_widths = c(1, 2)),
+  ncol = 1
+)
+```
+
+# Comparing ADOpy and MCMC
+
+```{r}
+plot_cra_all <-
+  dfs_res$cra %>%
+  draw_comp_fig(
+    PARAMS$cra,
+    title = 'Choice under risk and ambiguity',
+    subtitle = sprintf(
+      'Before exclusion (N = %d)',
+      nrow(dfs_res$cra)
+    )
+  )
+
+plot_cra_exc <-
+  dfs_exc$cra %>%
+  draw_comp_fig(
+    PARAMS$cra,
+    title = 'Choice under risk and ambiguity',
+    subtitle = TeX(sprintf(
+      'After exclusion (N = %d)',
+      nrow(dfs_exc$cra)
+    ))
+  )
+
+plot_ddt_all <-
+  dfs_res$ddt %>%
+  draw_comp_fig(
+    PARAMS$ddt,
+    title = 'Delay discounting task',
+    subtitle = sprintf(
+      'Before exclusion (N = %d)',
+      nrow(dfs_res$ddt)
+    )
+  )
+
+plot_ddt_exc <-
+  dfs_exc$ddt %>%
+  draw_comp_fig(
+    PARAMS$ddt,
+    title = 'Delay discounting task',
+    subtitle = TeX(sprintf(
+      'After exclusion (N = %d)',
+      nrow(dfs_exc$ddt)
+    ))
+  )
+```
+
+## Before exclusion
+
+```{r fig_comp_all, fig.width = 12, fig.height = 8}
+plot_grid(
+  plot_cra_all,
+  plot_grid(NA, plot_ddt_all, rel_widths = c(1, 2), nrow = 1),
+  ncol = 1
+)
+```
+
+## After exclusion
+
+```{r fig_comp_exc, fig.width = 12, fig.height = 8}
+plot_grid(
+  plot_cra_exc,
+  plot_grid(NA, plot_ddt_exc, rel_widths = c(1, 2), nrow = 1),
+  ncol = 1
+)
+```
+
+# Session info
+
+## Session info
+
+\tiny
+```{r session_info}
+sessionInfo()
+```
