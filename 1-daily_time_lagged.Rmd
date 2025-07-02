@@ -24,7 +24,7 @@ header-includes:
 ```{r setup, include=FALSE}
 # Reset workspace
 rm(list = ls())
-setwd("~/Github/smoking_ado")
+setwd("~/Github/SmokingPred_ADO")
 
 # For plotting
 library(tidyverse)
