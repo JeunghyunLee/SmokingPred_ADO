@@ -75,42 +75,8 @@ MAP_LABEL_SURVEY <- list(
   "Q10"   = "time_with_family_friends",
   "Q11"   = "religion",
   "Q30"   = "Medication"
-  # "Q31"   = "medication_varenicline",
-  # "Q32"   = "medication_bupropion",
-  # "Q33"   = "medication_nicotine patches",
-  # "Q34"   = "medication_gum",
-  # "Q35"   = "medication_candy"
 )
 
-COLS_IV_DEMO <- c('age', 'sex', 'dur_smoking')
-LABELS_DEMO <- list(
-  age = 'Age',
-  sex = 'Sex (Female)',
-  sexFemale = 'Sex (Female)',
-  dur_smoking = 'Smoking duration'
-)
-LABELS_DV <- list(
-  daily_avg_cat_base = 'Cigarette usage (Screening)',
-  daily_avg_cat_pre = 'Cigarette usage (Pre-clinic)',
-  daily_avg_cat_post = 'Cigarette usage (Post-clinic)',
-  usage_reduced_12 = 'Cig usage reduced (Screening -- Pre-clinic)',
-  usage_reduced_13 = 'Cig usage reduced (Screening -- Post-clinic)',
-  usage_reduced_23 = 'Cig usage reduced (Pre-clinic -- Post-clinic)'
-  # usage_reduced_23 = 'Success to reduce\ncigarette usage'
-)
-
-LABELS_SMOKING_AVG <- c(
-  'y = 0',
-  '0 < y <= 5',
-  '5 < y <= 10',
-  # '10 < y <= 20',
-  '10 < y'
-  # 'y > 20'
-)
-LABELS_SMOKING_QUIT <- c(
-  'Quit',
-  'Non-quit'
-)
 MAP_LABEL_PARAM <- list(
   alpha = '$\\alpha$',
   beta = '$-\\beta$',
@@ -127,8 +93,7 @@ MAP_LABEL_DEMO <- list(
 
 MAP_LABEL <- c(MAP_LABEL_SURVEY, MAP_LABEL_PARAM, MAP_LABEL_DEMO)
 
-# IV_SURVEY <- c('Q1', 'Q2', 'Q3', 'Q6', 'Q7', 'Q8')
-IV_SURVEY <- c('Q1', 'Q2', 'Q3', 'Q6', 'Q7', 'Q8', 'Q30') # Q30 - medication
+IV_SURVEY <- c('Q1', 'Q2', 'Q3', 'Q6', 'Q7', 'Q8', 'Q30') 
 IV_PARAM <- c('alpha', 'beta', 'logk')
 IV_DEMO <- c('age', 'sex')
 
@@ -137,56 +102,7 @@ CRIT_DAYS = 14
 
 ```{r load_data}
 df_daily <- 
-  read_tsv(FILE_DATA, 'a1_daily.tsv', show_col_types = FALSE)
-
-### Quit criteria 
-## did_not_smoke_last_week_co
-  # 1) mri2 survey: did not smoke last week 
-  # 2) app survey: 0 smoke last week's mean response
-  # 3) mri2 CO: ppm <5ppm 
-## did_not_smoke_last_month_co
-  # 1) mri2 survey: did not smoke last month
-  # 2) app survey: 0 smoke last month's mean response
-  # 3) mri2 CO: ppm <5ppm 
-## usage_reduced
-  # 1) mri2 -> mri1 usage reduced
-FILE_CHEM <- file.path(PATH_REPO_DATA, 'chemical_tests_n121.csv')
-FILE_QUIT <- file.path(PATH_REPO_DATA, 'quit_n113.csv')
-FILE_APP_QUIT <- file.path(PATH_DATA, 'app-smoking_quit.tsv')
-
-df_chemical <- 
-  read_csv(FILE_CHEM, show_col_types = FALSE)
-
-df_quit <- 
-  read_csv(FILE_QUIT, show_col_types = FALSE) %>% 
-  full_join(read_tsv(FILE_APP_QUIT, show_col_types = FALSE),
-            by = 'subject')
-
-df_quit_crit <- 
-  df_quit %>% 
-    left_join(df_chemical %>% 
-                dplyr::select(subjID, CO_ppm_mri2) %>% 
-                rename(subject = subjID), by = 'subject') %>% 
-    mutate(did_not_smoke_last_week_co = ifelse(# did_not_smoke_last_week == 1 & 
-                                                 CO_ppm_mri2 <5 & 
-                                                 last_week_quit == 1, 1, 0),
-           did_not_smoke_last_month_co = ifelse(# did_not_smoke_last_month == 1 &
-                                                  CO_ppm_mri2 < 5 &
-                                                  last_month_quit == 1, 1, 0)) %>% 
-  dplyr::select(subject, last_week_quit, last_month_quit, 
-         did_not_smoke_last_week_co, did_not_smoke_last_month_co) 
-
-# Daily survey data (raw) For analysis 2
-df_survey_raw <-
-  read_tsv('./repo_data/app-survey_all.tsv', show_col_types = FALSE) 
-  # filter(day <= 14)
-
-# Daily app task data (raw) For analysis 2
-df_param_raw <-
-  read_tsv('./data/param_est_exc_full.tsv', show_col_types = FALSE)
-  # filter(day <= 14)
-
-
+  read_tsv(paste0(FILE_DATA, '/a1_daily.tsv'), show_col_types = FALSE)
 ```
 
 ```{r functions}
@@ -515,372 +431,11 @@ draw_figure <- function(data, config, mod, y_label, title) {
     ),
     nrow = 1
   )
-  #   plot_grid(
-  #     p_qq,
-  #     p_pred_true,
-  #     nrow = 1, align = 'hv'
-  #   ),
-  #   ncol = 1, rel_heights = c(2, 5, 5)
-  # )
 }
 ```
 
 ```{=html}
 <!-- -->
-```
-
-```{r fig.width = 8, fig.height = 10, out.width = '0.8\\textwidth'}
-# df_daily %>% # all for analysis 1
-df_a2_raw %>%  
-  # dplyr::select(subject, day_orig) %>%
-  # rename(day = day_orig) %>%
-  left_join(
-    df_exc %>% dplyr::select(subject, is_included),
-    by = 'subject'
-  ) %>% 
-  # group_by(subject) %>% 
-  #     mutate(count = row_number()) %>% 
-  #     filter(max(count) >=7) %>% ## N=2
-  mutate(group = str_c('20', str_sub(subject, 4, 5), '-', str_sub(subject, 6, 6)),
-         type = ifelse(is_included, 'inc', 'exc')) %>%
-  filter(type == 'inc') %>%
-  ggplot(aes(x = day, y = subject)) +
-  annotate('rect', xmin = c(0.5, 14.5, 28.5), xmax = c(7.5, 21.5, 35.5),
-           ymin = -Inf, ymax = Inf, alpha = 0.15) +
-  geom_point(size = 1.5) +
-  scale_x_continuous(breaks = seq(1, 43, 7), limits = c(0.5, 45), expand = c(0, 0)) +
-  facet_grid(group ~ ., scales = 'free_y', space = 'free_y', switch = 'y') +
-  theme_bw() +
-  theme(axis.title.y = element_blank(),
-        panel.grid.major.x = element_blank(),
-        panel.grid.minor.x = element_blank(),
-        legend.title = element_blank(),
-        strip.text.y.left = element_text(angle = 0),
-        strip.placement = 'outside')
-```
-
-## Participant demographics
-* (Reduced vs. Non-reduced)
-```{r}
-df_mod_raw <- read_tsv(str_glue(file.path(PATH_DATA, 'analysis_2_data_full_{CRIT_DAYS}days_raw.tsv')))
-
-left_join(
-  df_mod_raw %>% 
-    dplyr::select(subject, starts_with('daily_avg_cat'), starts_with('usage_reduced_')) %>% # smoked_last_week
-    # drop_na() %>%
-    gather(session, value, -subject, -starts_with('usage_reduced_')) %>%
-    mutate(value = factor(value, levels = c(LABELS_SMOKING_AVG, NA)),
-           session = session %>%
-             str_remove('daily_avg_cat_') %>%
-             factor(levels = c('base', 'pre', 'post'),
-                    labels = c('Screening visit', 'Pre-clinic visit', 'Post-clinic visit'))) %>%
-    mutate_at(vars(starts_with('usage_reduced_')),
-              function(x) factor(x, levels = 0:1, labels = c('Non-reduced', 'Reduced'))) %>%
-    arrange(subject, session) %>% 
-    dplyr::select(subject, usage_reduced_23) %>% 
-    unique(),
-  df_mod_raw %>%
-    # select(subject, 'sex', all_of(COLS_IV_DEMO), all_of(COLS_DV)),
-    dplyr::select(subject, 'sex', all_of(COLS_IV_DEMO), daily_avg_cat_base, daily_avg_cat_pre, daily_avg_cat_post),
-  by = "subject") %>% 
-  mutate(dur_smoking = replace(dur_smoking, subject == "SMO22209" & is.na(dur_smoking), 2)) %>% 
-    left_join(df_chemical %>% 
-              dplyr::select(subjID, CO_ppm_scr, CO_ppm_mri1, CO_ppm_mri2) %>% 
-              rename('subject' = 'subjID'), 
-            by = 'subject') %>% 
-  dplyr::select(-subject) %>% 
-  # drop_na() %>% 
-  rename('Sex' = 'sex',
-         'Age' = 'age',
-         'Smoking duration' = 'dur_smoking',
-         'Daily smoking amount (base)' = 'daily_avg_cat_base',
-         'Daily smoking amount (pre)' = 'daily_avg_cat_pre',
-         'Daily smoking amount (post)' = 'daily_avg_cat_post',
-         'CO level, ppm (base)' = 'CO_ppm_scr', 
-         'CO level, ppm (pre)' = 'CO_ppm_mri1', 
-         'CO level, ppm (post)' = 'CO_ppm_mri2'
-         ) %>% 
-  tbl_summary(
-    by = usage_reduced_23,
-    statistic = list(
-      all_continuous() ~ "{mean} ({sd})",
-      all_categorical() ~ "{n} ({p}%)"
-    ),
-    digits = all_continuous() ~ 2,
-  ) %>% 
-  add_p() %>% 
-  bold_labels() %>% 
-  as_kable_extra(format = 'latex', booktabs = TRUE, linesep = "",
-                 caption = 'Reduced vs. Non-reduced group comparison of demographic factors') %>%
-  kable_styling(latex_options = c("striped", "HOLD_position")) %>% 
-  pack_rows('Demographics', 1, 5) %>%
-  pack_rows('Cigarette usage', 6, 20) 
-  
-```
-
-
-* (Didn't smoke on the last week vs. smoked)
--   Criteria: app survey & CO (ppm) < 5
-```{r}
-df_mod_week <- read_tsv(str_glue(file.path(PATH_DATA, 'analysis_2_data_full_{CRIT_DAYS}days_raw.tsv'))) %>% 
-  dplyr::select(subject, sex, starts_with('daily_avg_cat')) %>% 
-  left_join(df_quit_crit %>% 
-              dplyr::select(subject, did_not_smoke_last_week_co, did_not_smoke_last_month_co), 
-            by = 'subject') %>% 
-  mutate(sex = case_when(sex == "Male" ~ "1",
-                         sex == "Female" ~ "0",
-                         TRUE ~as.character(sex)),
-          sex = as.numeric(sex)) %>% 
-  drop_na()
-
-left_join(
-  df_mod_week %>% 
-    dplyr::select(subject, starts_with('daily_avg_cat'), starts_with('did_not_smoke_last_')) %>% 
-    gather(session, value, -subject, -starts_with('did_not_smoke_last_week')) %>%
-    mutate(value = factor(value, levels = c(LABELS_SMOKING_QUIT, NA)),
-           session = session %>%
-             str_remove('daily_avg_cat_') %>%
-             factor(levels = c('base', 'pre', 'post'),
-                    labels = c('Screening visit', 'Pre-clinic visit', 'Post-clinic visit'))) %>%
-    mutate_at(vars(starts_with('did_not_smoke_last_')),
-              function(x) factor(x, levels = 0:1, labels = c('Non-quit', 'Quit'))) %>%
-    arrange(subject, session) %>% 
-    dplyr::select(subject, did_not_smoke_last_week_co) %>% 
-    unique(),
-  df_mod_raw %>%
-    # select(subject, 'sex', all_of(COLS_IV_DEMO), all_of(COLS_DV)),
-    dplyr::select(subject, 'sex', all_of(COLS_IV_DEMO), daily_avg_cat_base, daily_avg_cat_pre, daily_avg_cat_post),
-  by = "subject") %>% 
-  mutate(dur_smoking = replace(dur_smoking, subject == "SMO22209" & is.na(dur_smoking), 2)) %>% 
-    left_join(df_chemical %>% 
-              dplyr::select(subjID, CO_ppm_scr, CO_ppm_mri1, CO_ppm_mri2) %>% 
-              rename('subject' = 'subjID'), 
-            by = 'subject') %>% 
-  dplyr::select(-subject) %>% 
-  # drop_na() %>% 
-  rename('Sex' = 'sex',
-         'Age' = 'age',
-         'Smoking duration' = 'dur_smoking',
-         'Daily smoking amount (base)' = 'daily_avg_cat_base',
-         'Daily smoking amount (pre)' = 'daily_avg_cat_pre',
-         'Daily smoking amount (post)' = 'daily_avg_cat_post',
-         'CO level, ppm (base)' = 'CO_ppm_scr', 
-         'CO level, ppm (pre)' = 'CO_ppm_mri1', 
-         'CO level, ppm (post)' = 'CO_ppm_mri2'
-         ) %>% 
-  tbl_summary(
-    by = did_not_smoke_last_week_co,
-    statistic = list(
-      all_continuous() ~ "{mean} ({sd})",
-      all_categorical() ~ "{n} ({p}%)"
-    ),
-    digits = all_continuous() ~ 2,
-  ) %>% 
-  add_p() %>% 
-  bold_labels() %>% 
-  as_kable_extra(format = 'latex', booktabs = TRUE, linesep = "",
-                 caption = 'Quit vs. Non-quit group (last week) comparison of demographic factors') %>%
-  kable_styling(latex_options = c("striped", "HOLD_position")) %>% 
-  pack_rows('Demographics', 1, 5) %>%
-  pack_rows('Cigarette usage', 6, 20) 
-  
-```
-
-* (Didn't smoke on the last month vs. smoked)
--   Criteria: app survey & CO (ppm) < 5
-```{r}
-left_join(
-  df_mod_week %>% 
-    dplyr::select(subject, starts_with('daily_avg_cat'), starts_with('did_not_smoke_last_')) %>% 
-    gather(session, value, -subject, -starts_with('did_not_smoke_last_month')) %>%
-    mutate(value = factor(value, levels = c(LABELS_SMOKING_QUIT, NA)),
-           session = session %>%
-             str_remove('daily_avg_cat_') %>%
-             factor(levels = c('base', 'pre', 'post'),
-                    labels = c('Screening visit', 'Pre-clinic visit', 'Post-clinic visit'))) %>%
-    mutate_at(vars(starts_with('did_not_smoke_last_')),
-              function(x) factor(x, levels = 0:1, labels = c('Non-quit', 'Quit'))) %>%
-    arrange(subject, session) %>% 
-    dplyr::select(subject, did_not_smoke_last_month_co) %>% 
-    unique(),
-  df_mod_raw %>%
-    # select(subject, 'sex', all_of(COLS_IV_DEMO), all_of(COLS_DV)),
-    dplyr::select(subject, 'sex', all_of(COLS_IV_DEMO), ftnd, qsu, cds, daily_avg_cat_base, daily_avg_cat_pre, daily_avg_cat_post),
-  by = "subject") %>% 
-  mutate(dur_smoking = replace(dur_smoking, subject == "SMO22209" & is.na(dur_smoking), 2)) %>% 
-    left_join(df_chemical %>% 
-              dplyr::select(subjID, CO_ppm_scr, CO_ppm_mri1, CO_ppm_mri2) %>% 
-              rename('subject' = 'subjID'), 
-            by = 'subject') %>% 
-  dplyr::select(-subject) %>% 
-  # drop_na() %>% 
-  rename('Sex' = 'sex',
-         'Age' = 'age',
-         'Smoking duration' = 'dur_smoking',
-         # 'Daily smoking amount (base)' = 'daily_avg_cat_base',
-         # 'Daily smoking amount (pre)' = 'daily_avg_cat_pre',
-         # 'Daily smoking amount (post)' = 'daily_avg_cat_post',
-         'CO level, ppm (base)' = 'CO_ppm_scr', 
-         'CO level, ppm (pre)' = 'CO_ppm_mri1', 
-         'CO level, ppm (post)' = 'CO_ppm_mri2'
-         ) %>% 
-  tbl_summary(
-    by = did_not_smoke_last_month_co,
-    statistic = list(
-      all_continuous() ~ "{mean} ({sd})",
-      all_categorical() ~ "{n} ({p}%)"
-    ),
-    digits = all_continuous() ~ 2,
-  ) %>% 
-  add_p() %>% 
-  bold_labels() %>% 
-  as_kable_extra(format = 'latex', booktabs = TRUE, linesep = "",
-                 caption = 'Quit vs. Non-quit group (last month) comparison of demographic factors') %>%
-  kable_styling(latex_options = c("striped", "HOLD_position")) %>% 
-  pack_rows('Demographics', 1, 2) %>%
-  pack_rows('Cigarette usage', 3, 17) 
-```
-
-
-```{r}
-# beta = beta * (-1)
-# Group-level
-df_agg %>%
-  dplyr::select(subject, day, matches('Q\\d*'), lgQ1p, Q1p,
-         alpha_mean, beta_mean, logk_mean) %>%
-  rename_at(vars(ends_with('_mean')), function(c) str_remove(c, '_mean')) %>%
-  (function(data) {
-    inner_join(
-      data %>%
-        gather(colname, value, -subject, -day, -Q30) %>%
-        mutate(colname = str_c(colname, '_curr')) %>%
-        spread(colname, value),
-      data %>%
-        dplyr::select(-c(Q30)) %>% 
-        gather(colname, value, -subject, -day) %>%
-        mutate(colname = str_c(colname, '_next')) %>%
-        spread(colname, value) %>%
-        mutate(day = day - 1),
-      by = c('subject', 'day')
-    )
-  }) %>% 
-  dplyr::select(subject, day, Q30, ends_with('_curr'),
-         matches('(lg)?Q1p?_next')) %>% 
-  drop_na(all_of(str_c(c(IV_PARAM, 'Q1'), '_curr')), Q1_next) %>%
-  left_join(df_demo, by = 'subject') %>% 
-  mutate(day_orig = day) %>%
-  mutate(sex = factor(sex, levels = c('Male', 'Female'),
-                      labels = c('Male', 'Female'))) %>% 
-  rename(Q30_curr = Q30) %>% 
-  filter(subject %in% (df_exc %>% filter(is_included) %>% pull(subject))) %>% 
-  dplyr::select(subject, day_orig, Q1p_curr, alpha_curr, beta_curr, logk_curr) %>% 
-  pivot_longer(cols = c(Q1p_curr, alpha_curr, beta_curr, logk_curr), names_to = "var") %>% 
-  ggplot(aes(x = day_orig, y = value, color = var)) + 
-  stat_summary(fun.data = mean_se, geom = "point", position = position_dodge(0.9)) + 
-  stat_summary(fun.data = mean_se, geom = "linerange", position = position_dodge(0.9)) + 
-  stat_summary(fun.data = mean_se, geom = "line", position = position_dodge(0.9)) + 
-  scale_color_manual(name = "Variables", 
-                     labels = c(TeX('$\\alpha$'),
-                                TeX('-$\\beta$'),
-                                TeX('log k'),
-                                'Daily smoking'),
-                     values=c("skyblue", "blue", "darkblue", "red")) + 
-  scale_y_continuous(
-    "Estimates", 
-    sec.axis = sec_axis(~ . * 1.20, name = "Cigarettes per day")
-  ) + 
-  xlab("Day") + 
-  # geom_point(size = 1.5) +
-  # scale_x_continuous(breaks = seq(1, 43, 7), limits = c(0.5, 45), expand = c(0, 0)) +
-  # facet_grid(group ~ ., scales = 'free_y', space = 'free_y', switch = 'y') +
-  theme_bw() +
-  theme(panel.grid.minor.x = element_blank(),
-        # legend.title = element_blank(),
-        # axis.ticks.y.right = element_line(color = "red"),
-        axis.ticks.y = element_blank(),
-        axis.title.y.left = element_text(color = "blue"),
-        axis.text.y.left = element_text(color = "blue"),
-        axis.title.y.right = element_text(color = "red"),
-        axis.text.y.right = element_text(color = "red"),
-        strip.text.y.left = element_text(angle = 0),
-        strip.placement = 'outside',
-        legend.background = element_rect(colour = 'black', fill = 'white', linetype='solid'),
-        legend.position=c(.9, .8))
-
-# Individual-level
-df_agg %>%
-  dplyr::select(subject, day, matches('Q\\d*'), lgQ1p, Q1p,
-         alpha_mean, beta_mean, logk_mean) %>%
-  rename_at(vars(ends_with('_mean')), function(c) str_remove(c, '_mean')) %>%
-  (function(data) {
-    inner_join(
-      data %>%
-        gather(colname, value, -subject, -day, -Q30) %>%
-        mutate(colname = str_c(colname, '_curr')) %>%
-        spread(colname, value),
-      data %>%
-        dplyr::select(-c(Q30)) %>% 
-        gather(colname, value, -subject, -day) %>%
-        mutate(colname = str_c(colname, '_next')) %>%
-        spread(colname, value) %>%
-        mutate(day = day - 1),
-      by = c('subject', 'day')
-    )
-  }) %>% 
-  dplyr::select(subject, day, Q30, ends_with('_curr'),
-         matches('(lg)?Q1p?_next')) %>% 
-  drop_na(all_of(str_c(c(IV_PARAM, 'Q1'), '_curr')), Q1_next) %>%
-  left_join(df_demo, by = 'subject') %>% 
-  mutate(day_orig = day) %>%
-  mutate(sex = factor(sex, levels = c('Male', 'Female'),
-                      labels = c('Male', 'Female'))) %>% 
-  rename(Q30_curr = Q30) %>% 
-  filter(subject %in% (df_exc %>% filter(is_included) %>% pull(subject))) %>% 
-  dplyr::select(subject, day_orig, Q1p_curr, alpha_curr, beta_curr, logk_curr) %>% 
-  pivot_longer(cols = c(Q1p_curr, alpha_curr, beta_curr, logk_curr), names_to = "var") %>% 
-  ggplot(aes(x = day_orig, y = value, color = var)) + 
-  geom_point(aes(alpha = 0.4)) + 
-  # stat_summary(fun.data = mean_se, geom = "point", position = position_dodge(0.9)) + 
-  # stat_summary(fun.data = mean_se, geom = "linerange", position = position_dodge(0.9)) + 
-  # stat_summary(fun.data = mean_se, geom = "line", position = position_dodge(0.9)) + 
-  scale_color_manual(name = "Variables", 
-                     labels = c(TeX('$\\alpha$'),
-                                TeX('-$\\beta$'),
-                                TeX('log k'),
-                                'Daily smoking'),
-                     values=c("skyblue", "blue", "darkblue", "red")) + 
-  scale_y_continuous(
-    "Estimates", 
-    sec.axis = sec_axis(~ . * 1.20, name = "Cigarettes per day")
-  ) + 
-  xlab("Day") + 
-  # geom_point(size = 1.5) +
-  # scale_x_continuous(breaks = seq(1, 43, 7), limits = c(0.5, 45), expand = c(0, 0)) +
-  # facet_grid(group ~ ., scales = 'free_y', space = 'free_y', switch = 'y') +
-  theme_bw() +
-  theme(panel.grid.minor.x = element_blank(),
-        # legend.title = element_blank(),
-        # axis.ticks.y.right = element_line(color = "red"),
-        axis.ticks.y = element_blank(),
-        axis.title.y.right = element_text(color = "red"),
-        axis.text.y.right = element_text(color = "red"),
-        strip.text.y.left = element_text(angle = 0),
-        strip.placement = 'outside',
-        legend.background = element_rect(colour = 'black', fill = 'white', linetype='solid'),
-        legend.position=c(.9, .87))
-
-```
-
-```{r}
-df_demo %>%
-  filter(subject %in% (df_exc %>% filter(is_included) %>% pull(subject))) %>%
-  dplyr::select(sex, age) %>%
-  tbl_summary(
-    statistic = list(
-      all_continuous() ~ "{mean} ({sd}; {min}, {max})"
-    )
-  ) %>%
-  as_kable_extra(format = 'latex', booktabs = TRUE)
 ```
 
 ```{r}
@@ -902,50 +457,6 @@ p_coef <-
           axis.text.y = element_text(size = 11, hjust = 1, color = 'black'),
           plot.title = element_text(face = "bold", hjust = 0.5),
           plot.subtitle = element_text(hjust = 0.5))  
-```
-
-
-```{r, fig.width = 8, fig.height = 3.5}
-plot_grid(
-  df_agg %>%
-    filter(subject %in% (df_exc %>% filter(is_included) %>% pull(subject))) %>%
-    dplyr::select(day, Q1) %>%
-    drop_na() %>%
-    group_by(day) %>%
-    summarize(m = mean(Q1, na.rm = TRUE),
-              std = sd(Q1, na.rm = TRUE),
-              se = sd(Q1, na.rm = TRUE) / sqrt(n() - 1)) %>%
-    ggplot(aes(x = day, y = m)) +
-    annotate('rect', xmin = c(0.5, 14.5, 28.5), xmax = c(7.5, 21.5, 35.5),
-             ymin = -Inf, ymax = Inf, alpha = 0.15) +
-    geom_hline(yintercept = 0) +
-    # geom_ribbon(aes(ymin = m - 1.96 * se, ymax = m + 1.96 * se),
-    #             fill = '#999999', alpha = 0.5) +
-    # geom_errorbar(aes(ymin = m - 1.96 * se, ymax = m + 1.96 * se),
-    #               width = 0, alpha = 0.5) +
-    geom_errorbar(aes(ymin = m - std, ymax = m + std),
-                  width = 0, alpha = 0.5) +
-    geom_point() +
-    geom_line() +
-    scale_x_continuous(breaks = seq(1, 43, 7), limits = c(0.5, 43.5), expand = c(0, 0)) +
-    # scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
-    labs(x = 'Day', y = 'Cigarette usage',
-         caption = TeX('* Errorbars indicate the ranges of mean $\\pm$ 1 SD for each day.')) +
-    # coord_cartesian(ylim = c(0, NA)) +
-    theme_bw() +
-    theme(panel.grid.major.x = element_blank(),
-          panel.grid.minor.x = element_blank()),
-  df_agg %>%
-    filter(subject %in% (df_exc %>% filter(is_included) %>% pull(subject))) %>%
-    ggplot(aes(x = Q1)) +
-    geom_bar(stat = "count", fill = "#999999") +
-    geom_line(stat = "count") +
-    geom_point(stat = "count") +
-    scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
-    labs(x = "Cigarette usage", y = "Frequency") +
-    theme_bw(),
-  nrow = 1, align = 'hv'
-)
 ```
 
 \pagebreak
@@ -1022,24 +533,10 @@ run_model_with_loocv <- function(data, config) {
 
 ```{r configs}
 configs_mod <- list(
-  # list(
-  #   model_family = gaussian(),
-  #   model_name = 'LM'
-  # ),
-  # list(
-  #   model_family = gaussian(link = 'log'),
-  #   model_name = 'GLM',
-  #   model_desc = '(Gaussian, log link)'
-  # ),
   list(
     model_family = gaussian(),
     model_name = 'LMM'
   ),
-  # list(
-  #   model_family = gaussian(link = 'log'),
-  #   model_name = 'GLMM',
-  #   model_desc = '(Gaussian, log link)'
-  # ),
   NULL
 )
 
@@ -1115,7 +612,7 @@ CONFIGS <-
 ```
 
 ```{r run_cv}
-fn_cache <- './cache/cvfits_time-lagged_with_med.RData'
+fn_cache <- './data/cvfits_time-lagged_with_med.RData'
 
 if (!file.exists(fn_cache) || TRUE) {
   df_cv <- NULL
@@ -1142,7 +639,6 @@ if (!file.exists(fn_cache) || TRUE) {
     )
   }
   save(cvfits, df_cv, file = fn_cache)
-  # system(sprintf("slackbot -d '@jeunghyunlee' -m 'Appdata LMM CV, prediction complete'"))
 } else {
   load(fn_cache)
 }
@@ -1163,7 +659,6 @@ smr$coefficient %>%
     mutate(variable = factor(variable, levels = custom_order)) %>%
     arrange(variable) %>% 
     column_to_rownames('variable')
-
 
 best_model <- lmer(Q1_next ~  alpha_curr + beta_curr + logk_curr + Q1_curr + Q2_curr + Q3_curr + Q6_curr + Q7_curr + Q8_curr + Q30_curr + day + (1 | subject), data = df_daily)
 sum_best_model <- summary(best_model)
@@ -1358,107 +853,3 @@ draw_figure(
 
 
 ```
-
-## Full model
-
-```{r, fig.width = 8, fig.height = 4, out.width = '.8\\textwidth'}
-idx_full <- length(cvfits)
-cvfit_full <- cvfits[[idx_full]]
-config_full <- cvfit_full$config
-
-draw_figure(
-  cvfit_full$data,
-  config_full,
-  cvfit_full$mod,
-  config_full$dv,
-  sprintf(
-    'Model %d: %s %s\n%s',
-    idx_full, config_full$model_name,
-    ifelse(!is.null(config_full$model_desc), str_c('- ', config_full$model_desc), ''),
-    paste(format(cvfit_full$fml), collapse = '\n')
-  )
-)
-ggsave('figures/fig_time-lagged_full.pdf', width = 8, height = 4, dpi = 300)
-
-```
-
-```{r}
-# 
-df_daily %>%
-  group_by(day_orig) %>%
-  # summarise(correlation = cor(Q2_curr, logk_curr)) %>%
-  summarise(correlation = cor(Q2_curr, logk_curr),
-            p_value = cor.test(Q2_curr, logk_curr, use = "pairwise.complete.obs")$p.value,
-            n = sum(!is.na(Q2_curr) & !is.na(logk_curr))) %>% 
-  ggplot(aes(x = day_orig, y = correlation)) +
-  geom_point(alpha = 0.5) +
-  geom_text(
-    aes(label = ifelse(p_value < 0.05, "*", "")),  # Add asterisk if p_value < 0.05
-    vjust = 0.1, size = 6, color = "red"
-  ) + 
-  geom_hline(yintercept = 0, linetype = "dashed", color = "grey") + 
-  # geom_smooth(method = "lm", se = FALSE, color = "navy") +  # Add trend line
-  labs(title = "Correlation between Q2_curr and logk_curr by Day",
-       x = "day", y = "corr") +
-  theme_bw()
-
-df_daily %>% 
-  group_by(day)
-  ggplot(aes(x = Q2_curr, y = logk_curr)) +
-  geom_point(alpha = 0.5) +
-  facet_wrap(~ day) +
-  geom_smooth(method = "lm", se = FALSE, color = "blue") +  # Add trend line
-  labs(title = "Correlation between Q2_curr and logk_curr by Day",
-       x = "Q2_curr", y = "logk_curr") +
-  theme_bw()
-
-# day by day craving & logk
-df_daily %>% 
-  ggplot(aes(x = Q2_curr, y = logk_curr)) + 
-  geom_point() + 
-  coord_cartesian(xlim = c(-3, 3), ylim = c(-3, 3))
-
-df_numeric <- df_daily %>%
-  select(Q2_curr, logk_curr) %>%
-  na.omit() 
-
-cor_results <- Hmisc::rcorr(as.matrix(df_numeric))
-cor_matrix <- cor_results$r
-p_matrix <- cor_results$P
-
-ggcorrplot(cor_matrix,
-           method = "circle",
-           lab = TRUE,  # Show correlation coefficients
-           p.mat = p_matrix,  # Add p-values for significance
-           sig.level = 0.05,  # Only display significant correlations
-           insig = "blank",  # Hide insignificant correlations
-           type = "lower") +
-  labs(title = "Correlation Matrix with p-values",
-       subtitle = "Significant correlations (p < 0.05)",
-       caption = "Data includes selected variables") +
-  theme_minimal()
-
-correlation_data <- df_daily %>%
-  select(Q2_curr, alpha_curr, beta_curr, logk_curr)  # Select relevant variables
-correlation_matrix <- cor(correlation_data, use = "complete.obs")  # Compute correlation matrix
-
-# Convert correlation matrix to tidy format
-as.table(correlation_matrix) %>%
-  as.data.frame() %>% 
-  rename(Var1 = Var1, Var2 = Var2, Correlation = Freq) %>% 
-  ggplot(aes(x = Var1, y = Var2, fill = Correlation)) +
-  geom_tile(color = "white") +
-  scale_fill_gradient2(low = "blue", high = "red", mid = "white",
-                       midpoint = 0, limit = c(-1, 1), space = "Lab",
-                       name = "Correlation") +
-  theme_minimal() +
-  theme(
-    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
-    panel.grid = element_blank()
-  ) +
-  labs(title = "Correlation Matrix",
-       x = NULL,
-       y = NULL)
-```
-
-

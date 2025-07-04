@@ -29,7 +29,7 @@ editor_options:
 
 ```{r setup, include=FALSE}
 rm(list = ls())
-setwd("~/Github/project_smoking_time-lagged_prediction-master")
+setwd("~/Github/SmokingPred_ADO")
 
 library(tidyverse)
 library(lubridate)
@@ -40,9 +40,6 @@ library(latex2exp)
 library(gtsummary)
 library(kableExtra)
 library(easyml) # Need to install with devtools/github
-
-# for (f in list.files('./easyml_source/', pattern="*.R")) {source(f)}
-# for (f in list.files('./easyml_source/man/', pattern="*.Rd")) {load(f)}
 
 library(varian)
 library(ggcorrplot)
@@ -189,407 +186,14 @@ get_label_for_term <- function(term) {
 }
 ```
 
-#  = 
 
 ```{r}
-df_demo <-
-  read_tsv(file.path(PATH_REPO_DATA, 'participants.tsv'), show_col_types = FALSE) %>%
-  select(subject, sex, age, valid) %>%
-  mutate(sex = factor(sex, levels = 2:1, labels = c('Male', 'Female'))) %>%
-  distinct()
-
-df_survey <-
-  read_tsv('./repo_data/survey.tsv', show_col_types = FALSE) %>%
-  rename_at(vars(matches('*-*')), function(v) str_replace_all(v, '-', '_')) %>%
-  select(subject, matches('*_total')) %>%
-  rename_at(vars(ends_with('_total')), function (v) str_remove(v, '_total') %>% str_to_lower())
-
-df_exc <-
-  read_csv('./data/subject_exc.csv', show_col_types = FALSE)
-
-df_exc %>%
-  filter(!str_starts(subject, 'SMO222'),
-         !str_starts(subject, 'SMO223')) %>%
-  mutate(valid = (valid == 1)) %>%
-  summary()
-
-df_smoke <-
-  read_tsv(file.path(PATH_REPO_DATA, 'smoking_comb.tsv'),
-           show_col_types = FALSE) %>%
-  select(subject, session, daily_avg_cat_comb, age_onset_smoking_comb,
-         dur_smoking_new) %>%
-  rename_at(vars(ends_with('_comb')),
-            function(c) str_remove(c, '_comb')) %>%
-  rename(dur_smoking = dur_smoking_new) %>%
-  gather(colname, value, -subject, -session) %>%
-  mutate(session = ifelse(session == 1, 'base',
-                          ifelse(session == 2, 'pre', 'post'))) %>%
-  unite(colname, colname, session) %>%
-  spread(colname, value) %>% 
-  mutate(daily_avg_cat_base = replace(daily_avg_cat_base, daily_avg_cat_base == 4, 3),
-         daily_avg_cat_pre = replace(daily_avg_cat_pre, daily_avg_cat_pre == 4, 3),
-         daily_avg_cat_post = replace(daily_avg_cat_post, daily_avg_cat_post == 4, 3)) %>% 
-  mutate(
-    daily_avg_cat_base = factor(daily_avg_cat_base, levels = 0:(length(LABELS_SMOKING_AVG) - 1), labels = LABELS_SMOKING_AVG),
-    daily_avg_cat_pre = factor(daily_avg_cat_pre, levels = 0:(length(LABELS_SMOKING_AVG) - 1), labels = LABELS_SMOKING_AVG),
-    daily_avg_cat_post = factor(daily_avg_cat_post, levels = 0:(length(LABELS_SMOKING_AVG) - 1), labels = LABELS_SMOKING_AVG),
-    # freq_smoking_base = factor(freq_smoking_base, levels = 1:5, labels = LABELS_SMOKING_FREQ),
-    # freq_smoking_pre = factor(freq_smoking_pre, levels = 1:5, labels = LABELS_SMOKING_FREQ),
-    # freq_smoking_post = factor(freq_smoking_post, levels = 1:5, labels = LABELS_SMOKING_FREQ),
-    # smoked_last_week_base = as.integer(smoked_last_week_base),
-    # smoked_last_week_pre = as.integer(smoked_last_week_pre),
-    # smoked_last_week_post = as.integer(smoked_last_week_post))
-  ) %>%
-  mutate(
-    usage_reduced_12 = compare_smoking_lt(daily_avg_cat_base, daily_avg_cat_pre),
-    usage_reduced_13 = compare_smoking_lt(daily_avg_cat_base, daily_avg_cat_post),
-    usage_reduced_23 = compare_smoking_lt(daily_avg_cat_pre, daily_avg_cat_post)
-  ) %>%
-  select(-matches('age_onset_smoking_(pre|post)'),
-         -matches('dur_smoking_(pre|post)')) %>%
-  rename(age_onset_smoking = age_onset_smoking_base,
-         dur_smoking = dur_smoking_base) %>% 
-  filter(daily_avg_cat_base != '0 < y <= 5' & daily_avg_cat_base != 'y = 0')
-
-df_param <-
-  read_tsv(file.path(PATH_DATA, 'app-task.tsv'), show_col_types = FALSE) %>%
-  select(subject, day, ends_with('_mean'), ends_with('_ado')) %>%
-  filter(day > 0) %>%
-  rename_at(vars(ends_with('_mean')), function(c) str_remove(c, '_mean'))
-  # select(subject, day, all_of(COLS_IV_PARAM))
-
-df_mod_raw <-
-  df_param %>%
-      group_by(subject) %>%
-      mutate(count = row_number()) %>%
-      ungroup() %>%
-      # filter(count <= 5) %>%
-      (function(data) {
-        if (is.null(CRIT_DAYS) || is.na(CRIT_DAYS)) {
-          return(data)
-        }
-        
-        data %>%
-          filter(day <= CRIT_DAYS)
-      }) %>%
-      (function(data) {
-        if (is.null(CRIT_COUNT) || is.na(CRIT_COUNT)) {
-          return(data)
-        }
-        
-        data %>%
-          filter(count <= CRIT_COUNT)
-      }) %>%
-      dplyr::select(-day, -count) %>%
-      group_by(subject) %>% 
-  left_join(df_exc %>% 
-              dplyr::select(subject, is_included), by = 'subject') %>%
-  filter(is_included) %>%
-  # left_join(df_daily_rmssd, by = 'subject') %>%
-  # left_join(df_daily_sd, by = 'subject') %>%
-  left_join(df_survey, by = 'subject') %>%
-  left_join(df_smoke, by = 'subject') %>% 
-  summarize_all(function(x) mean(x, na.rm = TRUE))%>% 
-  left_join(df_demo, by = 'subject') %>% 
-  filter(subject != 'SMO19205' & subject != 'SMO22209')
-
-df_mod <-
-  df_mod_raw %>%
-  mutate(sex = as.integer(sex) - 1) %>%
-  mutate_at(vars(-subject, -sex, -valid, -starts_with('daily_avg_cat'),
-                 -starts_with('usage_reduced_'), -is_included),
-            function(x) scale(x) %>% .[,1])
-```
-
-## correlation between mcmc sampling and ado
-```{r}
-df_a2 <- read_tsv(file.path('./data_a2.tsv'), 
-                  show_col_types = FALSE)
-
-# alpha
-df_param %>% 
-  filter(subject %in% df_a2$subject & day > 0) %>% 
-  ggplot(aes(x = alpha, y = alpha_mean_ado)) + 
-  # stat_cor(method = "pearson", label.x = 0, label.y = 4.5, p.accuracy = 0.001, r.accuracy = 0.01) + 
-  geom_jitter(alpha= 0.8, size = 0.8) + 
-  geom_smooth(method = "lm", se = TRUE, color = "#FEA3AA", fill = "#FEA3EB") +  
-  geom_vline(xintercept = 2.5, linetype = "dotted", color = "black") +
-  geom_hline(yintercept = 2.5, linetype = "dotted", color = "black") +
-  scale_x_continuous(breaks = c(0, 2.5, 5), labels = c("0", "2.5", "5")) +
-  scale_y_continuous(breaks = c(0, 2.5, 5), labels = c("0", "2.5", "5")) +
-  coord_cartesian(xlim = c(0, 5), ylim = c(0, 5)) + 
-  labs(x = "MCMC sampled", y = "ADO-estimated") +
-  theme_bw() + 
-  theme(panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank(),
-        axis.ticks = element_blank(),
-        panel.border = element_blank(),
-        axis.line = element_line(colour = "black"))
-
-# -beta
-df_param %>% 
-  filter(subject %in% df_a2$subject & day > 0) %>% 
-  mutate(`-beta` = beta * (-1),
-         `-beta_mean_ado` = beta_mean_ado * (-1)) %>% 
-  ggplot(aes(x = `-beta`, y = `-beta_mean_ado`)) + 
-  # stat_cor(method = "pearson", label.x = -3, label.y = 2.5, p.accuracy = 0.001, r.accuracy = 0.01) + 
-  geom_jitter(alpha= 0.8, size = 0.8) + 
-  geom_smooth(method = "lm", se = TRUE, color = "#BAED10", fill = "#BAEEAA") +  
-  geom_vline(xintercept = 0, linetype = "dotted", color = "black") +
-  geom_hline(yintercept = 0, linetype = "dotted", color = "black") +
-  scale_x_continuous(breaks = c(-3, 0, 3), labels = c("-3", "0", "3")) +
-  scale_y_continuous(breaks = c(-3, 0, 3), labels = c("-3", "0", "3")) +
-  coord_cartesian(xlim = c(-3, 3), ylim = c(-3, 3)) + 
-  labs(x = "MCMC sampled", y = "ADO-estimated") +
-  theme_bw() + 
-  theme(panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank(),
-        axis.ticks = element_blank(),
-        panel.border = element_blank(),
-        axis.line = element_line(colour = "black"))
-
-# logk
-df_param %>% 
-  filter(subject %in% df_a2$subject & day > 0) %>% 
-  ggplot(aes(x = logk, y = logk_mean_ado)) + 
-  # stat_cor(method = "pearson", label.x = -10, label.y = 1.5, p.accuracy = 0.001, r.accuracy = 0.01) + 
-  geom_jitter(alpha= 0.8, size = 0.8) + 
-  geom_smooth(method = "lm", se = TRUE, color = "#00ABFF", fill = "#94DFFF") +  
-  geom_vline(xintercept = -4, linetype = "dotted", color = "black") +
-  geom_hline(yintercept = -4, linetype = "dotted", color = "black") +
-  scale_x_continuous(breaks = c(-10, -4, 2), labels = c("-10", "-4", "2")) +
-  scale_y_continuous(breaks = c(-10, -4, 2), labels = c("-10", "-4", "2")) +
-  coord_cartesian(xlim = c(-10, 2), ylim = c(-10, 2)) + 
-  labs(x = "MCMC sampled", y = "ADO-estimated") +
-  theme_bw() + 
-  theme(panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank(),
-        axis.ticks = element_blank(),
-        panel.border = element_blank(),
-        axis.line = element_line(colour = "black"))
-
-# loggamma
-df_param %>% 
-  filter(subject %in% df_a2$subject & day > 0) %>% 
-  ggplot(aes(x = loggamma, y = loggamma_mean_ado)) + 
-  # stat_cor(method = "pearson", label.x = -10, label.y = 1.5, p.accuracy = 0.001, r.accuracy = 0.01) + 
-  geom_jitter(alpha= 0.8, size = 0.8) + 
-  geom_smooth(method = "lm", se = TRUE, color = "#00ABFF", fill = "#94DFFF") +  
-  geom_vline(xintercept = 0, linetype = "dotted", color = "black") +
-  geom_hline(yintercept = 0, linetype = "dotted", color = "black") +
-  scale_x_continuous(breaks = c(-4, 0, 3), labels = c("-4", "0", "3")) +
-  scale_y_continuous(breaks = c(-4, 0, 3), labels = c("-4", "0", "3")) +
-  coord_cartesian(xlim = c(-4, 3), ylim = c(-4, 3)) + 
-  labs(x = "MCMC sampled", y = "ADO-estimated") +
-  theme_bw() + 
-  theme(panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank(),
-        axis.ticks = element_blank(),
-        panel.border = element_blank(),
-        axis.line = element_line(colour = "black"))
-```
-
-```{r}
-FILE_CHEM <- file.path(PATH_REPO_DATA, 'chemical_tests_n121.csv')
-FILE_QUIT <- file.path(PATH_REPO_DATA, 'quit_n113.csv')
-FILE_APP_QUIT <- file.path(PATH_DATA, 'app-smoking_quit.tsv')
-
-df_chemical <- 
-  read_csv(FILE_CHEM, show_col_types = FALSE)
-
-df_quit <- 
-  read_csv(FILE_QUIT, show_col_types = FALSE) %>% 
-  full_join(read_tsv(FILE_APP_QUIT, show_col_types = FALSE),
-            by = 'subject')
-
-df_quit_crit <- 
-  df_quit %>% 
-    left_join(df_chemical %>% 
-                dplyr::select(subjID, CO_ppm_mri2) %>% 
-                rename(subject = subjID), by = 'subject') %>% 
-    mutate(did_not_smoke_last_week_co = ifelse(# did_not_smoke_last_week == 1 & 
-                                                 CO_ppm_mri2 <5 & 
-                                                 last_week_quit == 1, 1, 0),
-           did_not_smoke_last_month_co = ifelse(# did_not_smoke_last_month == 1 &
-                                                  CO_ppm_mri2 < 5 &
-                                                  last_month_quit == 1, 1, 0)) %>% 
-  dplyr::select(subject, last_week_quit, last_month_quit, 
-         did_not_smoke_last_week_co, did_not_smoke_last_month_co) 
-
-## parameter estimates by groups
-df_param_group <- 
-df_quit_crit %>% 
-  select(subject, did_not_smoke_last_month_co) %>% 
-  left_join(df_param %>% 
-              mutate(`-beta` = beta * (-1)) %>% 
-              select(subject, alpha, `-beta`, loggamma, logk, logtau), by = 'subject') %>%
-  filter(subject %in% df_a2$subject) %>% 
-  group_by(subject) %>% 
-  summarise_all(funs(mean), na.rm = TRUE) %>% 
-  mutate(did_not_smoke_last_month_co = 
-           ifelse(did_not_smoke_last_month_co == 1, "quit", "fail"))
-# alpha
-df_param_group %>% 
-  ggplot(aes(x = alpha, ..count..,  # ..scaled.. or ..density..
-             fill = factor(did_not_smoke_last_month_co))) + 
-  geom_density(alpha = 0.4) + 
-  scale_y_continuous(breaks = c(0, 40), labels = c("0", "40")) +
-  # geom_histogram(binwidth = 0.1, position = "identity", alpha = 0.8) +
-  scale_fill_manual(values = c("lightgray", "#FEA3AA"), labels = c("Fail", "Quit")) + 
-  labs(x = "Mean ", y = "Count", fill = "Group") +
-  theme_classic() + 
-  theme(axis.ticks = element_blank(),
-        legend.position = c(0.8, 0.8))
-
-df_param_group %>% 
-  ggplot(aes(x = factor(did_not_smoke_last_month_co), y = alpha,
-             fill = factor(did_not_smoke_last_month_co))) + 
-  # stat_summary(fun = mean, geom = "bar", color = "black") + 
-  # stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.01) +
-  geom_violin(alpha = 0.5, color = "black") +  
-  geom_boxplot(width = 0.2, color = "black", outlier.shape = NA) +  
-  stat_compare_means(method = "t.test", label = "p.signif", hide.ns = TRUE,
-                     label.x = 1.5, label.y = 2) +
-  scale_y_continuous(breaks = c(0, 0.5, 1, 1.5, 2), 
-                     labels = c("0", "0.5", "1", "1.5", "2")) +
-  coord_cartesian(ylim = c(0, 2.5)) + 
-  scale_fill_manual(values = c("lightgray", "#FEA3AA"), 
-                    labels = c("Fail", "Quit")) + 
-  theme_classic() + 
-  labs(x = "", y = "Mean", fill = "Group") +
-  theme(axis.ticks = element_blank(),
-        axis.text.x = element_text(size = 12),
-        axis.text.y = element_text(size = 10),
-        legend.position = "none")
-
-# -beta
-df_param_group %>% 
-  ggplot(aes(x = `-beta`, ..count..,  # ..scaled.. or ..density..
-             fill = factor(did_not_smoke_last_month_co))) + 
-  geom_density(alpha = 0.4) + 
-  # coord_cartesian(xlim = c(-3, 3)) + 
-  scale_y_continuous(breaks = c(0, 40), labels = c("0", "40")) +
-  # geom_histogram(binwidth = 0.1, position = "identity", alpha = 0.8) +
-  scale_fill_manual(values = c("lightgray", "#BAED10"), 
-                    labels = c("Fail", "Quit")) + 
-  labs(x = "Mean ", y = "Count", fill = "Group") +
-  theme_classic() + 
-  theme(axis.ticks = element_blank(),
-        legend.position = c(0.8, 0.8))
-
-df_param_group %>% 
-  ggplot(aes(x = factor(did_not_smoke_last_month_co), y = `-beta`,
-             fill = factor(did_not_smoke_last_month_co))) + 
-  # stat_summary(fun = mean, geom = "bar", color = "black") + 
-  # stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.01) +
-  geom_violin(alpha = 0.5, color = "black") +  
-  geom_boxplot(width = 0.2, color = "black", outlier.shape = NA) +  
-  stat_compare_means(method = "t.test", label = "p.signif", hide.ns = TRUE,
-                     label.x = 1.5, label.y = 2) +
-  scale_y_continuous(breaks = c(-3, 0, 3),
-                     labels = c("-3", "0", "3")) +
-  coord_cartesian(ylim = c(-3, 3)) + 
-  scale_fill_manual(values = c("lightgray", "#BAED10"), 
-                    labels = c("Fail", "Quit")) + 
-  theme_classic() + 
-  labs(x = "", y = "Mean", fill = "Group") +
-  theme(axis.ticks = element_blank(),
-        axis.text.x = element_text(size = 12),
-        axis.text.y = element_text(size = 10),
-        legend.position = "none")
-
-# logk
-df_param_group %>% 
-  ggplot(aes(x = logk, ..count..,  # ..scaled.. or ..density..
-             fill = factor(did_not_smoke_last_month_co))) + 
-  geom_density(alpha = 0.4) + 
-  coord_cartesian(xlim = c(-8, 1)) + 
-  scale_y_continuous(breaks = c(0, 12), labels = c("0", "12")) +
-  # geom_histogram(binwidth = 0.1, position = "identity", alpha = 0.8) +
-  scale_fill_manual(values = c("lightgray", "#00ABFF"), 
-                    labels = c("Fail", "Quit")) + 
-  labs(x = "Mean ", y = "Count", fill = "Group") +
-  theme_classic() + 
-  theme(axis.ticks = element_blank(),
-        legend.position = c(0.8, 0.8))
- 
-df_param_group %>% 
-  ggplot(aes(x = factor(did_not_smoke_last_month_co), y = logk,
-             fill = factor(did_not_smoke_last_month_co))) + 
-  # stat_summary(fun = mean, geom = "bar", color = "black") + 
-  # stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.01) +
-  geom_violin(alpha = 0.5, color = "black") +  
-  geom_boxplot(width = 0.2, color = "black", outlier.shape = NA) +  
-  stat_compare_means(method = "t.test", label = "p.signif", hide.ns = TRUE,
-                     label.x = 1.5, label.y = 0) +
-  scale_y_continuous(breaks = c(-8, 0),
-                     labels = c("-8", "0")) +
-  coord_cartesian(ylim = c(-9, 1)) + 
-  scale_fill_manual(values = c("lightgray", "#00ABFF"), 
-                    labels = c("Fail", "Quit")) + 
-  theme_classic() + 
-  labs(x = "", y = "Mean", fill = "Group") +
-  theme(axis.ticks = element_blank(),
-        axis.text.x = element_text(size = 12),
-        axis.text.y = element_text(size = 10),
-        legend.position = "none")
-
-# loggamma
-df_param_group %>% 
-  ggplot(aes(x = factor(did_not_smoke_last_month_co), y = loggamma,
-             fill = factor(did_not_smoke_last_month_co))) + 
-  # stat_summary(fun = mean, geom = "bar", color = "black") + 
-  # stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.01) +
-  geom_violin(alpha = 0.5, color = "black") +  
-  geom_boxplot(width = 0.2, color = "black", outlier.shape = NA) +  
-  stat_compare_means(method = "t.test", label = "p.signif", hide.ns = TRUE,
-                     label.x = 1.5, label.y = 0) +
-  scale_y_continuous(breaks = c(-3, 3),
-                     labels = c("-3", "3")) +
-  coord_cartesian(ylim = c(-3, 3)) + 
-  scale_fill_manual(values = c("lightgray", "#734F96"), 
-                    labels = c("Fail", "Quit")) + 
-  theme_classic() + 
-  labs(x = "", y = "Mean", fill = "Group") +
-  theme(axis.ticks = element_blank(),
-        axis.text.x = element_text(size = 12),
-        axis.text.y = element_text(size = 10),
-        legend.position = "none")
-
-# logtau
-df_param_group %>% 
-  ggplot(aes(x = factor(did_not_smoke_last_month_co), y = logtau,
-             fill = factor(did_not_smoke_last_month_co))) + 
-  # stat_summary(fun = mean, geom = "bar", color = "black") + 
-  # stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.01) +
-  geom_violin(alpha = 0.5, color = "black") +  
-  geom_boxplot(width = 0.2, color = "black", outlier.shape = NA) +  
-  stat_compare_means(method = "t.test", label = "p.signif", hide.ns = TRUE,
-                     label.x = 1.5, label.y = 0) +
-  scale_y_continuous(breaks = c(-3, 3),
-                     labels = c("-3", "3")) +
-  coord_cartesian(ylim = c(-3, 3)) + 
-  scale_fill_manual(values = c("lightgray", "#734F96"), 
-                    labels = c("Fail", "Quit")) + 
-  theme_classic() + 
-  labs(x = "", y = "Mean", fill = "Group") +
-  theme(axis.ticks = element_blank(),
-        axis.text.x = element_text(size = 12),
-        axis.text.y = element_text(size = 10),
-        legend.position = "none")
-```
-
-
-
-```{r, eval=FALSE}
 
 df_easyml <-
-  read_tsv(file.path('./analysis_2_data.tsv'), 
+  read_tsv(file.path('./data/a2_pred.tsv'), 
                       show_col_types = FALSE) %>% 
   select(subject, age, dur_smoking, craving, mood, stress, depression, anxiety,
-         craving_var, mood_var, stress_var, depression_var, anxiety_var,
-         ftnd, qsu, cds,
-         alpha, `beta`, logk, usage_reduced) %>% 
+         alpha, `beta`, logk, did_not_smoke_last_month_co) %>% 
   drop_na()
 
 
@@ -660,27 +264,20 @@ plot_model_performance_histogram <- function(x, name) {
 LABELS_EASY <- list(
   sex = 'Sex (Female)',
   age = 'Age',
-  alpha = '$\\alpha$',
-  beta = '$\\beta$',
-  logk = 'log k',
-  # alpha = '$\\alpha$ (risk tolerance)',
-  # beta = '$\\beta$ (ambiguity aversion)',
-  # logk = 'log k (log discounting rate)',
+  alpha = '$\\alpha$ (risk tolerance)',
+  beta = '$\\-beta$ (ambiguity aversion)',
+  logk = 'log k (log discounting rate)',
   dur_smoking = 'Years smoking',
   craving = 'Craving',
   mood = 'Mood',
   stress = 'Stress',
   anxiety = 'Anxiety',
   depression = 'Depression'
-  # mood_var = 'Mood (var)',
-  # stress_var = 'Stress (var)',
-  # craving_var = 'Craving (var)',
-  # anxiety_var = 'Anxiety (var)',
-  # depression_var = 'Depression (var)'
 )
-# fn_output <- './2-pred_usage_reduced_easyml_7days_0.5.Rdata' # alpha = 0.5
-fn_output <- './2-pred_usage_reduced_easyml_0.5.Rdata' # alpha = 0.5
+
+fn_output <- './2-pred_usage_reduced_easyml_0.6.Rdata' # alpha = 0.5
 load(fn_output)
+
 fit_roc <- pROC::roc(output$y_test, output$predictions_test)
 fit_roc %>%
   ggroc(legacy.axes = TRUE, size = 1) +
@@ -692,23 +289,14 @@ fit_roc %>%
        x = 'True positive rate', y = 'False positive rate') +
   theme_bw()
 
-# fn_output <- './2-pred_usage_reduced_easyml_0.0.Rdata'
 
 #### To run eaysml model
-df_easyml <- read_tsv(file.path(PATH_DATA, 'analysis_2_data.tsv'), 
-                      show_col_types = FALSE) %>% 
-  rename(beta = `-beta`, usage_reduced = usage_reduced_23) %>% 
-  select(subject, age, dur_smoking, craving, mood, stress, depression, anxiety,
-         # craving_var, mood_var, stress_var, depression_var, anxiety_var,
-         # ftnd, qsu, cds,
-         alpha, beta, logk, usage_reduced) %>% 
-  drop_na()
 
 # for glmnet settings
-model_args = list(alpha = 0.5, nfolds = 10) # alpha = 1(lasso), 3 folds for CV
+model_args = list(alpha = 0.6, nfolds = 10) # alpha = 1(lasso), 3 folds for CV
 
-output2 = easy_glmnet(df_easyml, 
-                     dependent_variable = "usage_reduced", 
+output = easy_glmnet(df_easyml, 
+                     dependent_variable = "did_not_smoke_last_month_co", 
                      family="binomial",
                      exclude_variables = c("subject"), 
                      n_samples=100, n_divisions = 100, 
@@ -897,9 +485,8 @@ draw_figure <- function(data, config, mod, y_label, title) {
   plot_grid(
     pp_coef,
     p_roc,
-    ncol = 2, rel_widths = c(3, 2))# ,
-  #   ncol = 1, rel_heights = c(1, 5)
-  # )
+    ncol = 2, rel_widths = c(3, 2)
+    )
 }
 ```
 
@@ -923,25 +510,3 @@ draw_figure(
 ggsave('figures/fig_reduc-pred_best.pdf', width = 8, height = 3, dpi = 300)
 ```
 
-## Full model
-
-```{r, fig.width = 8, fig.height = 3.5, out.width = '.8\\textwidth'}
-idx_full <- length(cvfits)
-cvfit_full <- cvfits[[idx_full]]
-config_full <- cvfit_full$config
-
-draw_figure(
-  cvfit_full$data,
-  config_full,
-  cvfit_full$mod,
-  config_full$dv,
-  sprintf(
-    'Model %d: %s %s\n%s',
-    idx_full, config_full$model_name,
-    ifelse(!is.null(config_full$model_desc), str_c('- ', config_full$model_desc), ''),
-    paste(format(cvfit_full$fml), collapse = '\n')
-  )
-)
-
-ggsave('figures/fig_reduc-pred_full.pdf', width = 8, height = 3, dpi = 300)
-```
