@@ -275,8 +275,8 @@ LABELS_EASY <- list(
   depression = 'Depression'
 )
 
-fn_output <- './2-pred_usage_reduced_easyml_0.6.Rdata' # alpha = 0.5
-load(fn_output)
+# fn_output <- './data/easymlfits_pred-usage-reduced.Rdata' # alpha = 0.5
+# load(fn_output)
 
 fit_roc <- pROC::roc(output$y_test, output$predictions_test)
 fit_roc %>%
@@ -309,7 +309,7 @@ save(output, file = fn_output)
 load(fn_output)
 
 df_coef <- 
-  output$coefficients_processed %>% 
+  output2$coefficients_processed %>% 
   as.data.frame() %>% 
   # mutate(se = sd/sqrt(1000)) %>% 
   mutate(se = sd) %>% 
@@ -336,7 +336,7 @@ df_coef %>%
     geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0, color = 'black') +
     geom_point(size = 4) +
     labs(y = "Beta estimate") +
-    scale_x_discrete(labels = TeX(as.character(df_coef$predictor))) +
+    # scale_x_discrete(labels = TeX(as.character(df_coef$predictor))) +
     scale_color_manual(values = c("1" = "red", "0" = "#666666", "-1" = "blue")) +
     coord_flip(ylim = c(-1.2, 0.8)) +
     theme_bw() +
